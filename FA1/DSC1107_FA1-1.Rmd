@@ -1,0 +1,219 @@
+---
+title: "FA1: Data Visualization"
+author: "Baybayon, Darlyn Antoinette"
+output: github_document
+editor_options: 
+  chunk_output_type: inline
+message: FALSE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### 1. Case Study
+
+```{r}
+library(tidyverse)
+diamonds
+
+```
+
+### 3. Variations
+#### 3.1 Discrete Variables
+
+```{r, echo = TRUE}
+ggplot(data=diamonds) + geom_bar(mapping = aes(x=cut))
+```
+
+Ideal is the most common diamond cut.
+
+#### 3.2 Continuous Variables
+```{r}
+ggplot(data=diamonds) + geom_histogram(mapping = aes(x=carat))
+```
+
+The distribution of carats is skewed to the right. The values occur below 3.
+```{r,  echo = TRUE}
+ggplot(data = diamonds) +
+geom_histogram(mapping = aes(x = carat),binwidth = 0.01) +
+coord_cartesian(xlim = c(0,3))
+
+```
+
+Most diamonds have carat values 1 and below (0.25, 0.5, 0.75, 1). Higher carat values are rare and expensive. Smaller diamonds are more common and are typically used for jewelry.
+
+### 4. Covariation
+#### 4.1 Discrete vs. Discrete
+
+```{r,  echo = TRUE}
+ggplot(data = diamonds) +
+geom_count(mapping = aes(x = cut, y = clarity))
+
+```
+
+There appears to be a positive covariance between cut and clarity. Better cuts seem to have more diamonds with better clarity. 
+
+#### 4.2 Continuous vs. Continuous
+##### 4.2.1 Many to one
+
+```{r,  echo = TRUE}
+ggplot(data = diamonds) +
+geom_point(mapping = aes(x = x, y = y))
+
+```
+
+
+```{r,  echo = TRUE, warning=FALSE}
+ggplot(data = diamonds) +
+geom_point(mapping = aes(x = x, y = y)) +
+coord_cartesian(xlim = c(3.5, 10), ylim = c(3.5,10)) +
+geom_abline(slope = 1, intercept = 0, color = "red") +
+coord_cartesian(xlim = c(3.5, 10), ylim = c(3.5,10))
+
+```
+
+Lengths x and y are approximately equal for most diamonds in the dataset might be because most of the diamonds are cut in round and square shapes which have equal length and width.
+
+The aes() function is used to map dataset variables to properties.
+slope = 1, intercept = 0, and color = "red" are not inside aes() because these properties specify a fixed diagonal line that is not dependent on the dataset.
+
+
+
+##### 4.2.2 One to One
+```{r,  echo = TRUE}
+avg_price_by_carat <- diamonds %>%
+mutate(carat = round(carat, 1)) %>%
+group_by(carat) %>%
+summarise(avg_price = mean(price))
+avg_price_by_carat
+
+```
+
+```{r,  echo = TRUE}
+ggplot(data = avg_price_by_carat) +
+geom_line(mapping = aes(x = carat, y = avg_price))
+```
+
+What is the relationship between average price and carat? Does this make sense
+
+
+#### 4.3 Continuous vs. Discrete
+
+```{r,  echo = TRUE}
+ggplot(data = diamonds)+
+  geom_boxplot(mapping= aes(x=cut, y=price))
+
+```
+
+Those thick black lines in the middle denote the median price for each cut. What trend do we observe in the median price based as the cut improves? Is this what you would have expected?
+
+Better cuts appear to have lower prices. I assume more refined cuts might result to lighter and smaller diamonds which are commonly used for jewelry. Carat weight may be the more significant factor in pricing diamonds, so it would make sense why ideal cut diamonds are less expensive than others.
+
+
+#### 4.4 Correlation Matrices
+
+```{r,  echo = TRUE}
+library(stats)
+
+corrmat <- cor(diamonds[, c("table", "price", "z", "y", "carat", "x", "depth")], use = "complete.obs")
+corrmat
+```
+
+```{r,  echo = TRUE}
+library(ggcorrplot)
+ggcorrplot(corrmat, lab=TRUE, hc.order = TRUE)
+```
+
+### 5 Additional visualization tools
+#### 5.1 Axis transformation
+
+```{r,  echo = TRUE}
+ggplot(data = diamonds) +
+geom_histogram(aes(x = carat), binwidth = 0.01)
+
+ggplot(data = diamonds) +
+geom_histogram(aes(x = carat), binwidth = 0.01) +
+scale_x_log10()
+
+ggplot(data = diamonds) +
+geom_point(aes(x = carat, y = price)) +
+scale_x_log10() +
+scale_y_log10()
+
+
+```
+
+#### 5.2 Multiple geoms in the same plot
+
+```{r,  echo = TRUE}
+ggplot(data = avg_price_by_carat) +
+geom_line(mapping = aes(x = carat, y = avg_price)) +
+geom_point(mapping = aes(x = carat, y = avg_price))
+
+
+ggplot(data = avg_price_by_carat, mapping = aes(x = carat, y = avg_price)) +
+geom_line() +
+geom_point()
+```
+
+#### 5.3 Multiple aesthetics in the same geom
+
+```{r,  echo = TRUE}
+ggplot(data = diamonds) +
+geom_point(mapping = aes(x = carat, y = price))
+
+
+ggplot(data = diamonds) +
+geom_point(mapping = aes(x = carat, y = price, color = cut))
+
+```
+
+#### 5.4 Faceting
+
+```{r,  echo = TRUE}
+ggplot(data=diamonds) + 
+  geom_point(mapping = aes(x = carat, y = price)) +
+  facet_wrap(~cut)
+
+ggplot(data=diamonds) + 
+  geom_point(mapping = aes(x = carat, y = price)) +
+  facet_grid(. ~cut)
+
+ggplot(data=diamonds)+
+ geom_point(mapping=aes(x=carat,y=price))+
+ facet_grid(clarity~cut)
+
+
+```
+
+
+
+### 7 Exercises
+#### 7.1 Relating the carat and cut of a diamond
+
+The plot from 5.3 shows that lower carat weights appear to have better cuts. Quality of cuts in lower carat weights might be prioritized as they are commonly preferred for jewelry over larger diamonds. To directly visualize this relationship refer to the plot below.
+
+
+```{r}
+ggplot(data = diamonds) +
+geom_count(mapping = aes(x = cut, y = carat))
+
+```
+
+This explains the trend in the plot from 4.3. Because lower carat weights have better cuts, ideal cut diamonds are generally less expensive.
+
+#### 7.2 Relating the size and carat of a diamond
+```{r}
+ggplot(data= diamonds) + geom_point(mapping = aes(x=carat, y=y))
+
+# zoom in
+ggplot(data= diamonds) + geom_point(mapping = aes(x=carat, y=y)) +
+  coord_cartesian(xlim=c(0,5), ylim=c(3,10))
+
+```
+
+The plot suggests that the diamond size and carat have a positive covariance as they increase together. Carat measures the physical weight of diamonds so naturally, bigger diamonds would have higher mass and carat weight.
+
+
+
