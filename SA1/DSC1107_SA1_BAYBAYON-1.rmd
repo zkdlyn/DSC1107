@@ -1,0 +1,511 @@
+---
+title: "DSC1107 | SA 1"
+author: "Baybayon, Darlyn Antoinette B."
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r library}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(dplyr)
+  library(readr)
+  library(ggplot2)
+  library(stat471)
+  library(caret)
+  library(glmnet)
+  library(cowplot)
+  library(corrplot)
+  library(rpart)
+  library(rpart.plot)
+  library(randomForest)
+  library(broom)
+  library(glmnetUtils)
+})
+
+```
+
+
+### Unit 1: R for Data Mining
+
+#### 1. Intro to Modern Data Mining
+- Load the dataset and provide an overview of its structure (e.g., dimensions, missing values, types of variables).
+
+- Explain why data mining is important for this dataset.
+
+```{r}
+dataset <- read_csv("customer_churn.csv", show_col_types = FALSE)
+
+dataset
+
+sapply(dataset, function(x) sum(is.na(x)))
+
+summary(dataset)
+```
+
+The dataset contains 10,000 observations (rows) with 12 features (columns) including numerical and categorical variables. The features include CustomerID, Gender, SeniorCitizen, Partner, Dependents, Tenure, PhoneService, InternetService, Contract, MonthlyCharges, TotalCharges, and Churn. These are information on the customers' demographics, contract details, service charges, and whether they have churned or not. No null values are found in this dataset. Customer retention is an important business metric, thus, predicting customer churn is vital for business growth. Data mining would be very helpful in order to better understand the customers and analyze churn trends so that the company may improve customer retention.
+
+
+#### 2. Data Visualization
+
+- Create at least three meaningful visualizations to explore relationships in the data (e.g., churn rate by tenure, service type, or monthly charges).
+
+- Provide insights based on the visualizations.
+
+```{r}
+plot_grid(
+  ggplot(dataset, aes(x = Churn)) +
+  geom_bar(aes(fill = Churn)) + coord_flip(),
+  
+  ggplot(dataset, aes(x = InternetService)) +
+  geom_bar(aes(fill = Churn)) + coord_flip() ,
+  
+  ggplot(dataset, aes(x = SeniorCitizen)) +
+  geom_bar(aes(fill = Churn)) + coord_flip(),
+  
+  ggplot(dataset, aes(x = Gender)) +
+  geom_bar(aes(fill = Churn)) + coord_flip() ,
+  
+  
+  ncol = 2 
+)
+
+
+dataset %>%
+  group_by(Tenure) %>%
+  summarize(
+    Churn_rate = mean(as.numeric(Churn=="Yes"), na.rm=TRUE)
+  ) %>% 
+  ggplot(aes(x=Tenure, y=Churn_rate)) +geom_point() +
+  geom_smooth(se=FALSE, method = "lm")
+
+```
+
+Majority of the customers have not  churned yet. There are slightly more Fiber optic users from the customers subscribed to an internet service. Non-Senior Citizens make up most of the customers. There are slightly more female customers than male. For the categories shown, the trend remains that more customers have not churned. Meanhwile, the plot of Churn Rate vs. Tenure shows a slightly positive relationship between these variables. 
+
+
+
+#### 3. Data Transformation
+- Handle missing values appropriately.
+
+- Convert categorical variables into factor variables.
+
+- Normalize or standardize numerical features where necessary.
+
+
+```{r}
+
+dataset <- dataset %>%
+  select(-CustomerID) %>%
+  mutate(
+    Partner = if_else(Partner == "No", 0, 1),
+    Dependents = if_else(Dependents == "No", 0, 1),
+    PhoneService = if_else(PhoneService == "No", 0, 1),
+    Churn = if_else(Churn == "No", 0, 1),
+    across(c(Gender,Partner, Dependents, PhoneService, InternetService, Contract, Churn), as.factor)
+    )
+
+head(dataset)
+```
+
+#### 4. Data Wrangling
+
+- Filter data to remove outliers.
+
+- Create new derived variables that may help in predictive modeling.
+
+- Aggregate or summarize data if necessary.
+
+```{r, fig.height=4}
+
+data_long <- dataset %>%
+  pivot_longer(cols = c('Tenure', 'MonthlyCharges', 'TotalCharges'), 
+               names_to = 'Variable', 
+               values_to = 'Value')
+
+
+ggplot(data = data_long, mapping = aes(x = Value, fill = Variable)) +
+  geom_boxplot(alpha=0.6) +
+  facet_wrap(~Variable, ncol = 3, scales="free_x") 
+```
+
+Outliers in TotalCharges will be removed.
+
+```{r}
+
+quantiles <- quantile(dataset$TotalCharges, probs = c(0.25, 0.75))
+lower_bound <- quantiles[1] - 1.5 * (quantiles[2] - quantiles[1])
+upper_bound <- quantiles[2] + 1.5 * (quantiles[2] - quantiles[1])
+
+data_clean <- dataset %>%
+  filter(TotalCharges >= lower_bound & TotalCharges <= upper_bound) %>%
+  mutate(
+    SpendingLevel = factor(case_when(
+    TotalCharges <= quantile(TotalCharges, 0.33, na.rm = TRUE) ~ "Low",
+    TotalCharges <= quantile(TotalCharges, 0.67, na.rm = TRUE) ~ "Medium",
+    TRUE ~ "High")),
+    TenureGroup = cut(Tenure, 
+                          breaks =  c(0, 12, 24, 36, 48, 60, 71), 
+                          labels = c("Short-term", "1-2 years", "2-3 years", "3-4 years", "4-5 years", "5+ years"),
+                          include.lowest = TRUE))
+
+
+head(data_clean)
+
+summary_tenure<- data_clean %>%
+  group_by(TenureGroup) %>%
+  summarize(
+    ChurnRate = mean((Churn == 1), na.rm = TRUE),
+    MeanTotalCharges = mean(TotalCharges, na.rm = TRUE),
+    TotalCustomers = n()
+  )
+summary_tenure
+
+
+summary_spend<- data_clean %>%
+  group_by(SpendingLevel) %>%
+  summarize(
+    ChurnRate = mean((Churn == 1), na.rm = TRUE),
+    MeanTotalCharges = mean(TotalCharges, na.rm = TRUE),
+    TotalCustomers = n()
+  )
+summary_spend
+
+
+summary_churn <- data_clean %>%
+  group_by(Churn) %>%
+  summarise(
+    MeanTenure = mean(Tenure, na.rm = TRUE),
+    MedianCharges = median(MonthlyCharges, na.rm = TRUE),
+    TotalCharges = sum(MonthlyCharges, na.rm = TRUE),
+    Count = n(),
+    MinTenure = min(Tenure, na.rm = TRUE),
+    MaxTenure = max(Tenure, na.rm = TRUE),
+    SDTenure = sd(Tenure, na.rm = TRUE)
+  )
+summary_churn
+
+
+```
+
+
+
+#### 5. Review
+
+- Summarize key takeaways from the exploratory data analysis process.
+
+More customers in the dataset have not churned yet, however there is still a significant portion of those who have. Churn Rate increase slightly with longer Tenure periods. The number of customers also declines with longer Tenure.
+
+
+### Unit 2: Tuning Predictive Models
+
+
+```{r}
+
+set.seed(123)
+
+data_clean <- data_clean %>% select(-SpendingLevel, -TenureGroup)
+table(data_clean$Churn)
+#oversample churn =1 
+data_clean <- upSample(x = data_clean[, -ncol(data_clean)], y = data_clean$Churn)
+
+table(data_clean$Class)
+
+n <- nrow(data_clean)
+train_samples <- sample(1:n, round(0.8*n))
+
+data_train <- data_clean[train_samples, ]
+data_test <- data_clean[-train_samples, ]
+
+
+```
+
+#### 6. Model Complexity
+
+- Fit a decision tree and logistic regression model.
+
+- Compare their complexities and explain trade-offs.
+
+
+```{r}
+model_tree <- rpart(Class ~ ., data = data_train, method = "class", control=rpart.control(cp=.0001, maxdepth = 7))
+# summary(model_tree)
+rpart.plot(model_tree, cex=0.5)
+
+```
+
+
+
+```{r}
+model_logistic <- glm(Class ~ ., data=data_train, family=binomial)
+summary(model_logistic)
+
+```
+
+Logistic regression assumes linear relationship between the variables. It has lower model complexity and is prone to underfitting and failing to capture all patterns in the data. In comparison, decision trees are more complex and can capture non-linear relationships. It can capture more information the more complex it is but with the risk of overfitting. 
+
+#### 7. Bias-Variance Trade-Off
+
+- Explain the concept of bias-variance trade-off in the context of the models trained.
+
+- Discuss how model complexity affects performance.
+
+The bias-variance trade-off describes the relationship between a model's complexity and accuracy. It implies that the as we increase the model complexity, its variance increases, and bias decreases. Performance improves with greater complexity but only up to some point where it starts to overfit. It is crucial to find the correct balance between bias and variance to avoid overfitting and underfitting. Logistic regression generally has high bias and low variance as it is a simple linear model while decision trees can reduce bias and increase variance with higher depth.
+
+#### 8. Cross-Validation
+- Use k-fold cross-validation (k=10) to evaluate model performance.
+
+- Report and interpret accuracy, precision, recall, and F1-score.
+
+```{r}
+
+train_control <- trainControl(method = "cv", number = 10)
+
+cv_model <- train(Class ~., data = data_train, 
+               method = "glm",
+               family= "binomial",
+               trControl = train_control)
+cv_model
+classification_metrics(
+  test_responses = data_test$Class,
+  test_predictions = predict(cv_model, data_test)
+)
+```
+
+This model accurately predicts 51.8% of customer churn. Since this is a binary classification, this accuracy is only slightly better than random guessing.  50% of the churn instances predicted by the model were truly positive and correctly identified  45.9% of churn instances. the F score of F=0.47 suggests that the model exhibited moderate performance,.
+
+
+#### 9. Classification
+
+- Train a Random Forest classifier to predict customer churn.
+
+- Tune hyperparameters using grid search.
+
+- Report final model performance.
+
+```{r}
+rf_model <- randomForest(factor(Class) ~. , data=data_train)
+plot(rf_model)
+
+tuneGrid <- expand.grid(.mtry = c(1: 10))
+rf_tune <- train(Class~.,
+    data = data_train,
+    method = "rf",
+    metric = "Accuracy",
+    tuneGrid = tuneGrid,
+    trControl = train_control,
+    importance = TRUE,
+    nodesize = 14,
+    ntree=300)
+print(rf_tune)
+
+```
+
+```{r}
+modellist <- list()
+
+for (ntree in c(1000,1500,2000,2500)){
+  set.seed(123)
+  rf_tune <- train(Class~.,
+               data = data_train,
+               method = 'rf',
+               metric = 'Accuracy',
+               tuneGrid = tuneGrid,
+               trControl = train_control,
+               ntree = ntree)
+  key <- toString(ntree)
+  modellist[[key]] <- rf_tune
+}
+
+results <- resamples(modellist)
+summary(results)
+
+
+```
+
+
+Highest accuracy occurs at ntree = 2000 (accuracy = 82.30%)
+
+```{r}
+rf_model <- randomForest(factor(Class) ~., data=data_train, ntree=2000, mtry=9)
+
+summary(rf_model)
+plot(rf_model)
+
+
+classification_metrics(
+  test_responses = data_test$Class,
+  test_predictions = predict(rf_model, newdata = data_test, type = "response")
+)
+```
+
+
+### Unit 3: Regression-Based Methods
+
+#### 10. Logistic regression
+
+- Fit a logistic regression model using Churn as the dependent variable and Tenure, MonthlyCharges, and TotalCharges as independent variables.
+
+- Interpret the coefficients and assess model significance using p-values.
+
+```{r}
+model_logistic <- glm(Class ~ Tenure + MonthlyCharges + TotalCharges, data=data_train, family=binomial)
+summary(model_logistic)
+# confusionMatrix(logistic_predicted_churn, data_test$Class)
+
+```
+A logistic regressiion was performed to assess the effects of Tenure, MonthlyCharges, and TotalCharges on the likelihood of Churn. None of the predictors Tenure (B = 9.476e-04, p = 0.793), MonthlyCharges (B = -3.599e-04, p = 0.686), and TotalCharges (B = 4.315e-06, p = 0.892) was statistically significant. As assessed by deviance values (Null = 16052, Residual = 16050), the model fit does not strongly predict Churn. It can be inferred that the chosen predictors do not have a strong relationship with the outcome, Churn.
+
+```{r}
+
+logistic_predicted_churn <- factor(if_else(predict(model_logistic, newdata = data_test, type="response") > 0.5, 1, 0))
+classification_metrics(
+  test_responses = data_test$Class,
+  test_predictions = logistic_predicted_churn
+)
+```
+
+#### 11. Regression in High Dimensions
+
+- Discuss the challenges of high-dimensional regression and potential solutions.
+
+- Apply Principal Component Analysis (PCA) on numerical features (Tenure, MonthlyCharges, TotalCharges) to reduce dimensionality.
+
+```{r}
+model_lr <- glm(Class~ Tenure + MonthlyCharges + TotalCharges,
+                data=data_train, family="binomial")
+coef(model_lr)
+
+pca <- scale(data_train %>% select(Tenure, MonthlyCharges, TotalCharges))
+
+pca_model <- prcomp(pca, center = TRUE, scale. = TRUE)
+
+summary(pca_model)
+
+pca_model$sdev^2 / sum(pca_model$sdev^2)
+
+```
+
+
+#### 12. Ridge Regression
+
+- Implement Ridge Regression using Churn as the target variable and Tenure, MonthlyCharges, TotalCharges, and additional customer demographic features as predictors.
+
+- Identify the optimal lambda using cross-validation.
+
+```{r}
+ridge_fit <- cv.glmnet(
+  Class~ Tenure +MonthlyCharges + TotalCharges + Partner,
+  alpha = 0,
+  nfolds = 10,
+  family= "binomial",
+  type.measure = "class",
+  data= data_train
+)
+
+plot(ridge_fit)
+
+head(ridge_fit$lambda)
+
+head(ridge_fit$cvm)
+
+head(ridge_fit$cvsd)
+
+ridge_fit$lambda.min
+
+ridge_fit$lambda.1se
+
+coef_tidy(ridge_fit, s="lambda.min")
+
+coef_tidy(ridge_fit, s="lambda.1se")
+
+plot_glmnet(glmnet_fit = ridge_fit, data= data_train, features_to_plot = 5)
+
+```
+
+The summaries of coefficients using lambda.min and lambda.1se are displayed above. The coefficients obtained using lambda.min are larger compared to lambda.1se. Tenure has the greatest statistical influence on the predictions among other oredictors. Its sign implies that customers become more likely to Churn after longer Tenure periods. The least relevant predictor is TotalCharges with the smaallest coefficient.
+
+```{r}
+ridge_pred <- (predict(ridge_fit, newdata= data_test,
+                       s="lambda.min", type="response"))
+                   
+ridge_pred_class <- factor((if_else(ridge_pred > 0.5, 1, 0)))
+
+RMSE <- sqrt(mean((as.numeric(ridge_pred) - as.numeric(data_test$Class))^2))
+RMSE
+
+confusionMatrix(ridge_pred_class, data_test$Class)
+classification_metrics(
+  test_responses = data_test$Class,
+  test_predictions = ridge_pred_class
+)
+
+```
+
+The model has an accuracy of 47.91%, precision of 47.82% and recall of 42.22%. These indicate poor overall performance of the model. 
+
+#### 13. Lasso Regression
+
+- Implement Lasso Regression with the same feature set as Ridge Regression.
+
+- Discuss feature selection benefits and interpret the coefficients.
+
+```{r}
+lasso_fit <- cv.glmnet(
+  Class~ Tenure +MonthlyCharges + TotalCharges + Partner,
+  alpha=1,
+  nfolds = 10,
+  family="binomial",
+  type.measure="class",
+  data = data_train
+)
+
+plot(lasso_fit)
+
+plot_glmnet(lasso_fit, data_train)
+
+head(lasso_fit$lambda)
+
+head(lasso_fit$cvm)
+
+head(lasso_fit$cvsd)
+
+lasso_fit$lambda.min
+
+lasso_fit$lambda.1se
+
+coef_tidy(lasso_fit, s="lambda.min")
+coef_tidy(lasso_fit, s="lambda.1se")
+
+
+plot_glmnet(glmnet_fit = lasso_fit, data= data_train, features_to_plot = 4)
+```
+
+
+The summaries of coefficients using lambda.min and lambda.1se are displayed above. The coefficients obtained using lambda.min are larger compared to lambda.1se. Tenure again has the greatest statistical influence on the predictions among other predictors. Its sign implies that customers become more likely to Churn after longer Tenure periods. The least relevant predictor is TotalCharges with the smaallest coefficient.
+
+
+```{r}
+
+lasso_pred <- (predict(lasso_fit, newdata= data_test,
+                       s="lambda.min", type="response"))
+                   
+lasso_pred_class <- factor((if_else(lasso_pred > 0.5, 1, 0)))
+
+RMSE <- sqrt(mean((as.numeric(lasso_pred) - as.numeric(data_test$Class))^2))
+RMSE
+
+confusionMatrix(lasso_pred_class, data_test$Class)
+classification_metrics(
+  test_responses = data_test$Class,
+  test_predictions = lasso_pred_class
+)
+
+
+```
+
+The model has an accuracy of 48.05%, precision of 48.2% and recall of 48.3%. These indicate poor overall performance of the model. 
+
